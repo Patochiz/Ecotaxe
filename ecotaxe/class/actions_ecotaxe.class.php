@@ -183,7 +183,11 @@ class ActionsEcotaxe
 
         $commande->fetch_lines();
 
-        $db->begin();
+        // Ne gérer la transaction que si on n'est pas déjà dans une (ex: appel depuis un trigger)
+        $manageTransaction = ($db->transaction_opened == 0);
+        if ($manageTransaction) {
+            $db->begin();
+        }
 
         try {
             $poidsTotal = 0;
@@ -363,11 +367,15 @@ class ActionsEcotaxe
                 }
             }
 
-            $db->commit();
+            if ($manageTransaction) {
+                $db->commit();
+            }
             return 1;
 
         } catch (Exception $e) {
-            $db->rollback();
+            if ($manageTransaction) {
+                $db->rollback();
+            }
             dol_syslog('ActionsEcotaxe::calculateEcotaxeForOrder error: ' . $e->getMessage(), LOG_ERR);
             return -1;
         }

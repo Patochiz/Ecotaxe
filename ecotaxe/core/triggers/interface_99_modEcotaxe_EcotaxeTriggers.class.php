@@ -72,16 +72,32 @@ class InterfaceEcotaxeTriggers extends DolibarrTriggers
             return 0;
         }
 
-        // Ne pas recalculer si la ligne concernée est la ligne écotaxe elle-même
+        // Identifier le produit de la ligne concernée (selon le type d'objet reçu)
+        // Dans Dolibarr, $object peut être un Commande ou un OrderLine selon la version
         $ecotaxeServiceId = intval(!empty($conf->global->ECOTAXE_SERVICE_ID) ? $conf->global->ECOTAXE_SERVICE_ID : 0);
-        if ($ecotaxeServiceId > 0 && isset($object->fk_product) && $object->fk_product == $ecotaxeServiceId) {
+
+        $fk_product_line = 0;
+        if (isset($object->fk_product)) {
+            // $object est un OrderLine
+            $fk_product_line = $object->fk_product;
+        } elseif (isset($object->line) && isset($object->line->fk_product)) {
+            // $object est un Commande, la ligne est dans $object->line
+            $fk_product_line = $object->line->fk_product;
+        }
+
+        // Ne pas recalculer si la ligne concernée est la ligne écotaxe elle-même
+        if ($ecotaxeServiceId > 0 && $fk_product_line == $ecotaxeServiceId) {
             return 0;
         }
 
-        // Récupérer l'ID de la commande parente
+        // Récupérer l'ID de la commande parente (selon le type d'objet reçu)
         $commande_id = 0;
         if (isset($object->fk_commande) && $object->fk_commande > 0) {
+            // $object est un OrderLine
             $commande_id = $object->fk_commande;
+        } elseif (isset($object->element) && $object->element == 'commande' && $object->id > 0) {
+            // $object est un Commande
+            $commande_id = $object->id;
         }
 
         if ($commande_id <= 0) {
