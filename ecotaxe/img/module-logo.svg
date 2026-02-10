@@ -1,0 +1,13 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 64 64">
+  <!-- Fond -->
+  <circle cx="32" cy="32" r="30" fill="#e0f2f1"/>
+  
+  <!-- Feuille (symbole écologique) -->
+  <path d="M32 10 C42 10, 50 20, 50 32 C50 45, 38 54, 25 50 C20 48, 17 45, 15 40 C25 40, 32 35, 32 25 C32 20, 30 15, 25 12 Z" fill="#4caf50"/>
+  
+  <!-- Symbole Euro (€) pour représenter la taxe -->
+  <path d="M32 35 C28 35, 25 32, 25 29 L35 29 M32 41 C28 41, 25 38, 25 35 L35 35" stroke="#1565c0" stroke-width="3" fill="none" stroke-linecap="round"/>
+  
+  <!-- Cercle autour -->
+  <circle cx="32" cy="32" r="30" fill="none" stroke="#009688" stroke-width="2"/>
+</svg>

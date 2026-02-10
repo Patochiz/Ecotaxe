@@ -1,0 +1,23 @@
+# Module label 'ModuleEcotaxeName'
+ModuleEcotaxeName = Ecotax
+# Module description 'ModuleEcotaxeDesc'
+ModuleEcotaxeDesc = Module to automatically add ecotax to customer orders based on product weight
+
+# Administration page
+EcotaxeSetup = Ecotax module setup
+Settings = Settings
+EcotaxeSetupPage = Ecotax module configuration page
+
+About = About
+EcotaxeAbout = About Ecotax
+
+# Setup page
+EcotaxeText = Ecotax text
+EcotaxeTextDescription = Text to add in the product description for the ecotax
+EcotaxeValue = Ecotax value
+EcotaxeValueDescription = Ecotax value in € excluding VAT per ton
+
+# Permissions
+Calculer l'écotaxe = Calculate ecotax
+EcotaxeCalculated = Ecotax calculated
+ErrorOrderMustBeInDraftStatusToAddEcotaxe = The order must be in draft status to calculate ecotax

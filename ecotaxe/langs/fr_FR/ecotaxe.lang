@@ -1,0 +1,23 @@
+# Module label 'ModuleEcotaxeName'
+ModuleEcotaxeName = Écotaxe
+# Module description 'ModuleEcotaxeDesc'
+ModuleEcotaxeDesc = Module pour ajouter automatiquement une écotaxe aux commandes clients en fonction du poids des produits
+
+# Administration page
+EcotaxeSetup = Configuration du module Écotaxe
+Settings = Paramètres
+EcotaxeSetupPage = Page de configuration du module Écotaxe
+
+About = À propos
+EcotaxeAbout = À propos d'Écotaxe
+
+# Setup page
+EcotaxeText = Texte d'écotaxe
+EcotaxeTextDescription = Texte à ajouter dans la description du produit pour l'écotaxe
+EcotaxeValue = Valeur de l'écotaxe
+EcotaxeValueDescription = Valeur de l'écotaxe en € HT par tonne
+
+# Permissions
+Calculer l'écotaxe = Calculer l'écotaxe
+EcotaxeCalculated = Écotaxe calculée
+ErrorOrderMustBeInDraftStatusToAddEcotaxe = La commande doit être en brouillon pour calculer l'écotaxe
