@@ -21,3 +21,5 @@ EcotaxeValueDescription = Ecotax value in € excluding VAT per ton
 Calculer l'écotaxe = Calculate ecotax
 EcotaxeCalculated = Ecotax calculated
 ErrorOrderMustBeInDraftStatusToAddEcotaxe = The order must be in draft status to calculate ecotax
+ErrorCalculatingEcotaxe = Error calculating ecotax
+EcotaxeNothingToCalculate = Nothing to calculate (no products with weight or order not in draft status)

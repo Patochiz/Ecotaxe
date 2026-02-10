@@ -74,7 +74,7 @@ class modEcotaxe extends DolibarrModules
         // Define some features supported by module (triggers, login, substitutions, menus, css, etc...)
         $this->module_parts = array(
             // Set this to 1 if module has its own trigger directory (core/triggers)
-            'triggers' => 0,
+            'triggers' => 1,
             // Set this to 1 if module has its own models directory (core/modules/xxx)
             'models' => 0,
             // Set this to 1 if module overwrite template dir (core/tpl)
