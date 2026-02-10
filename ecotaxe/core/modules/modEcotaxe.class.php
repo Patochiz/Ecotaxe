@@ -74,7 +74,7 @@ class modEcotaxe extends DolibarrModules
         // Define some features supported by module (triggers, login, substitutions, menus, css, etc...)
         $this->module_parts = array(
             // Set this to 1 if module has its own trigger directory (core/triggers)
-            'triggers' => 0,
+            'triggers' => 1,
             // Set this to 1 if module has its own models directory (core/modules/xxx)
             'models' => 0,
             // Set this to 1 if module overwrite template dir (core/tpl)
@@ -92,7 +92,7 @@ class modEcotaxe extends DolibarrModules
             // Set this to relative path of js file if module has its own js file
             'js' => array(),
             // Set here all hooks context managed by module. To find available hook context, make a "grep -r '>initHooks(' *" on source code.
-            'hooks' => array('ordercard', 'ordersuppliercard', 'commandes', 'commandecard'),
+            'hooks' => array('ordercard'),
             // Set this to 1 if features of module are opened to external users
             'moduleforexternal' => 0,
         );

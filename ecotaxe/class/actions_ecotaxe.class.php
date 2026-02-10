@@ -32,19 +32,9 @@ class ActionsEcotaxe
     public $db;
 
     /**
-     * @var array Module configuration
+     * @var bool Drapeau anti-récursion pour le calcul automatique
      */
-    public $conf;
-
-    /**
-     * @var array Language dictionary
-     */
-    public $langs;
-
-    /**
-     * @var User User object
-     */
-    public $user;
+    private static $isCalculating = false;
 
     /**
      * Constructor
@@ -53,36 +43,39 @@ class ActionsEcotaxe
      */
     public function __construct($db)
     {
-        global $conf, $langs, $user;
-
         $this->db = $db;
-        $this->conf = $conf;
-        $this->langs = $langs;
-        $this->user = $user;
     }
 
     /**
-     * Overloading the addMoreActionsButtons function : replacing the parent's function with the one below
+     * Indique si un calcul d'écotaxe est en cours (anti-récursion)
      *
-     * @param array   $parameters Hook metadata (context, etc...)
+     * @return bool
+     */
+    public static function isCalculating()
+    {
+        return self::$isCalculating;
+    }
+
+    /**
+     * Overloading the addMoreActionsButtons function
+     *
+     * @param array    $parameters Hook metadata (context, etc...)
      * @param Commande $object     Current object
-     * @return int                0 < on error, 0 on success, 1 to replace standard code
+     * @return int                 0 < on error, 0 on success, 1 to replace standard code
      */
     public function addMoreActionsButtons($parameters, &$object)
     {
-        global $conf, $user, $langs;
+        global $user, $langs;
 
-        // Vérification des droits
         if (!$user->rights->commande->creer) {
             return 0;
         }
 
-        // On vérifie que l'on est bien sur une commande
         if ($parameters['currentcontext'] !== 'ordercard') {
             return 0;
         }
 
-        // On n'ajoute le bouton que si la commande est en brouillon
+        // Bouton disponible uniquement sur les commandes en brouillon
         if ($object->statut == 0) {
             print '<div class="inline-block divButAction">';
             print '<a class="butAction" href="' . $_SERVER["PHP_SELF"] . '?id=' . $object->id . '&action=calculate_ecotaxe">' . $langs->trans("Calculer l'écotaxe") . '</a>';
@@ -93,276 +86,43 @@ class ActionsEcotaxe
     }
 
     /**
-     * Overloading the doActions function : replacing the parent's function with the one below
+     * Overloading the doActions function
      *
-     * @param array   $parameters Hook metadatas (context, etc...)
-     * @param object  $object      Current object
-     * @return int                 0 < on error, 0 on success, 1 to replace standard code
+     * @param array  $parameters Hook metadatas (context, etc...)
+     * @param object $object     Current object
+     * @return int               0 < on error, 0 on success, 1 to replace standard code
      */
     public function doActions($parameters, &$object)
     {
-        global $conf, $user, $langs, $db;
+        global $user, $langs, $db;
 
-        // On vérifie que l'on est bien sur une commande
         if ($parameters['currentcontext'] !== 'ordercard') {
             return 0;
         }
 
-        // Récupération de l'action
         $action = GETPOST('action', 'aZ09');
 
-        // Action pour calculer l'écotaxe
         if ($action == 'calculate_ecotaxe') {
-            // Vérification des droits
             if (!$user->rights->commande->creer) {
                 return 0;
             }
 
-            // Chargement de la commande
-            require_once DOL_DOCUMENT_ROOT . '/commande/class/commande.class.php';
-            $commande = new Commande($db);
-            $result = $commande->fetch(GETPOST('id', 'int'));
-            if ($result <= 0) {
-                setEventMessages($langs->trans('ErrorRecordNotFound'), null, 'errors');
-                return 0;
+            $commande_id = GETPOST('id', 'int');
+            $result = self::calculateEcotaxeForOrder($db, $commande_id);
+
+            if ($result > 0) {
+                require_once DOL_DOCUMENT_ROOT . '/commande/class/commande.class.php';
+                $commande = new Commande($db);
+                $commande->fetch($commande_id);
+                $montant = isset($commande->array_options['options_eco_taxe']) ? $commande->array_options['options_eco_taxe'] : 0;
+                setEventMessages($langs->trans('EcotaxeCalculated') . ' : ' . price($montant) . ' € HT', null);
+            } elseif ($result < 0) {
+                setEventMessages($langs->trans('ErrorCalculatingEcotaxe'), null, 'errors');
+            } else {
+                setEventMessages($langs->trans('EcotaxeNothingToCalculate'), null, 'warnings');
             }
 
-            // On ne peut calculer l'écotaxe que sur une commande en brouillon
-            if ($commande->statut != 0) {
-                setEventMessages($langs->trans('ErrorOrderMustBeInDraftStatusToAddEcotaxe'), null, 'errors');
-                return 0;
-            }
-
-            // CORRECTION 1 : Démarrer une transaction pour assurer la cohérence
-            $this->db->begin();
-
-            try {
-                // Calcul du poids total et ajout de l'écotaxe
-                $poidsTotal = 0;
-                $montantEcotaxeTotal = 0;
-
-                // Récupération de la valeur de l'écotaxe par tonne
-                $ecotaxeValue = floatval(!empty($conf->global->ECOTAXE_VALUE) ? $conf->global->ECOTAXE_VALUE : 0.88);
-
-                // Récupérer l'ID du service d'écotaxe
-                $ecotaxeServiceId = intval(!empty($conf->global->ECOTAXE_SERVICE_ID) ? $conf->global->ECOTAXE_SERVICE_ID : 0);
-
-                // CORRECTION 2 : Rechargement explicite des lignes pour avoir les données les plus récentes
-                $commande->fetch_lines();
-
-                // Vérifier si une ligne de service d'écotaxe existe déjà
-                $ligneEcotaxeExistante = false;
-                $ligneEcotaxeId = 0;
-                $rangEcotaxeExistant = 0;
-
-                // ÉTAPE 1 : Calculer les montants d'écotaxe et mettre à jour les extrafields des lignes
-                if (!empty($commande->lines)) {
-                    foreach ($commande->lines as $line) {
-                        // Vérifier si c'est une ligne de service d'écotaxe existante
-                        if ($line->fk_product == $ecotaxeServiceId && $line->product_type == 1) {
-                            $ligneEcotaxeExistante = true;
-                            $ligneEcotaxeId = $line->id;
-                            $rangEcotaxeExistant = $line->rang;
-                            continue; // Ne pas traiter cette ligne pour le calcul
-                        }
-                        
-                        // On ne traite que les produits (pas les services) pour le calcul
-                        if ($line->product_type == 0 && $line->fk_product > 0) {
-                            // Chargement du produit pour récupérer son poids
-                            require_once DOL_DOCUMENT_ROOT . '/product/class/product.class.php';
-                            $product = new Product($db);
-                            $result = $product->fetch($line->fk_product);
-
-                            if ($result > 0 && $product->weight > 0) {
-                                // Calculer le poids total en tonnes pour cette ligne
-                                $weightUnit = $product->weight_units;
-                                $weightInKg = 0;
-
-                                // Conversion en kg selon l'unité
-                                switch ($weightUnit) {
-                                    case 0: // g
-                                        $weightInKg = $product->weight / 1000;
-                                        break;
-                                    case 3: // kg
-                                        $weightInKg = $product->weight;
-                                        break;
-                                    case 6: // t
-                                        $weightInKg = $product->weight * 1000;
-                                        break;
-                                    case 98: // lb
-                                        $weightInKg = $product->weight * 0.45359237;
-                                        break;
-                                    case 99: // oz
-                                        $weightInKg = $product->weight * 0.0283495231;
-                                        break;
-                                    default:
-                                        $weightInKg = $product->weight;
-                                }
-
-                                // Calculer le poids total de cette ligne
-                                $quantite = $line->qty;
-                                $poidsTotalLigne = ($weightInKg * $quantite) / 1000; // en tonnes pour le calcul de l'écotaxe
-                                $poidsTotal += ($weightInKg * $quantite); // en kg pour l'extrafield
-
-                                // Calcul de l'écotaxe pour cette ligne
-                                $montantEcotaxeLigne = round($poidsTotalLigne * $ecotaxeValue, 3);
-                                $montantEcotaxeTotal += $montantEcotaxeLigne;
-
-                                // Mise à jour de l'extrafield de la ligne
-                                if (!is_array($line->array_options)) {
-                                    $line->array_options = array();
-                                }
-                                $line->array_options['options_montant_ecotaxe'] = $montantEcotaxeLigne;
-                                
-                                // Mise à jour de la ligne en préservant le rang
-                                $result = $commande->updateline(
-                                    $line->id,
-                                    $line->desc,
-                                    $line->subprice,
-                                    $line->qty,
-                                    $line->remise_percent,
-                                    $line->tva_tx,
-                                    $line->localtax1_tx,
-                                    $line->localtax2_tx,
-                                    'HT',
-                                    $line->info_bits,
-                                    $line->date_start,
-                                    $line->date_end,
-                                    $line->product_type,
-                                    $line->fk_parent_line,
-                                    0,
-                                    $line->fk_fournprice,
-                                    $line->pa_ht,
-                                    $line->label,
-                                    $line->special_code,
-                                    $line->array_options,
-                                    $line->fk_unit,
-                                    $line->multicurrency_subprice,
-                                    $line->rang
-                                );
-                                
-                                if ($result <= 0) {
-                                    throw new Exception($langs->trans('ErrorUpdatingLine') . ' : ' . $commande->error);
-                                }
-                            }
-                        }
-                    }
-                }
-
-                // CORRECTION 3 : Rechargement de la commande après mise à jour des extrafields
-                $commande->fetch($commande->id);
-                $commande->fetch_lines();
-
-                // ÉTAPE 2 : Mise à jour des extrafields de la commande
-                if ($poidsTotal > 0) {
-                    $commande->array_options['options_poids_total'] = round($poidsTotal);
-                    // CORRECTION 4 : Utiliser le format décimal standard sans formatage de locale
-                    $montantEcotaxeTotalFormate = round($montantEcotaxeTotal, 3);
-                    $commande->array_options['options_eco_taxe'] = $montantEcotaxeTotalFormate;
-                    
-                    // Mise à jour de la commande
-                    $result = $commande->update($user);
-                    if ($result <= 0) {
-                        throw new Exception($langs->trans('ErrorUpdatingOrder') . ' : ' . $commande->error);
-                    }
-                    
-                    // ÉTAPE 3 : Gestion de la ligne de service d'écotaxe
-                    if ($ecotaxeServiceId > 0 && $montantEcotaxeTotalFormate > 0) {
-                        // Charger le service
-                        require_once DOL_DOCUMENT_ROOT . '/product/class/product.class.php';
-                        $service = new Product($db);
-                        $result = $service->fetch($ecotaxeServiceId);
-                        
-                        if ($result > 0) {
-                            $descriptionService = $service->description ? $service->description : '';
-                            $tva_tx = $service->tva_tx;
-                            
-                            if ($ligneEcotaxeExistante) {
-                                // Mettre à jour la ligne existante
-                                $result = $commande->updateline(
-                                    $ligneEcotaxeId,
-                                    $descriptionService,
-                                    $montantEcotaxeTotalFormate, // CORRECTION 5 : Utiliser le montant non formaté
-                                    1,
-                                    0,
-                                    $tva_tx,
-                                    0,
-                                    0,
-                                    'HT',
-                                    0,
-                                    '',
-                                    '',
-                                    1,
-                                    0,
-                                    0,
-                                    0,
-                                    0,
-                                    $service->label,
-                                    0,
-                                    array(),
-                                    $service->fk_unit,
-                                    0,
-                                    $rangEcotaxeExistant
-                                );
-                            } else {
-                                // Calculer le rang maximal et ajouter à la fin
-                                $rang_max = 0;
-                                foreach ($commande->lines as $line) {
-                                    if ($line->rang > $rang_max) {
-                                        $rang_max = $line->rang;
-                                    }
-                                }
-                                
-                                $result = $commande->addline(
-                                    $descriptionService,
-                                    $montantEcotaxeTotalFormate, // CORRECTION 6 : Utiliser le montant non formaté
-                                    1,
-                                    $tva_tx,
-                                    0,
-                                    0,
-                                    $ecotaxeServiceId,
-                                    0,
-                                    '',
-                                    '',
-                                    0,
-                                    0,
-                                    0,
-                                    0,
-                                    0,
-                                    0,
-                                    $rang_max + 1,
-                                    $service->fk_unit,
-                                    0,
-                                    'HT'
-                                );
-                            }
-                            
-                            if ($result <= 0) {
-                                throw new Exception($langs->trans('ErrorAddingEcotaxeService') . ': ' . $commande->error);
-                            }
-                            
-                            // CORRECTION 7 : Réorganiser les lignes après toutes les modifications
-                            $this->reorganizeOrderLines($commande);
-                        } else {
-                            throw new Exception($langs->trans('ErrorLoadingEcotaxeService'));
-                        }
-                    }
-                }
-
-                // CORRECTION 8 : Commit de la transaction
-                $this->db->commit();
-
-                // Message de succès
-                setEventMessages($langs->trans('EcotaxeCalculated') . ' : ' . price($montantEcotaxeTotal) . ' €', null);
-                
-            } catch (Exception $e) {
-                // CORRECTION 9 : Rollback en cas d'erreur
-                $this->db->rollback();
-                setEventMessages($e->getMessage(), null, 'errors');
-            }
-            
-            // Redirection vers la fiche commande
-            header('Location: ' . $_SERVER['PHP_SELF'] . '?id=' . $commande->id);
+            header('Location: ' . $_SERVER['PHP_SELF'] . '?id=' . $commande_id);
             exit;
         }
 
@@ -370,29 +130,304 @@ class ActionsEcotaxe
     }
 
     /**
-     * Réorganiser les lignes de commande pour s'assurer que l'écotaxe est en dernier
+     * Calcule et met à jour l'écotaxe pour une commande.
+     * Méthode statique réutilisable par les hooks et les triggers.
      *
+     * @param DoliDB $db          Database handler
+     * @param int    $commande_id ID de la commande
+     * @return int                1 si OK, 0 si rien à faire, -1 si erreur
+     */
+    public static function calculateEcotaxeForOrder($db, $commande_id)
+    {
+        if (self::$isCalculating) {
+            return 0;
+        }
+
+        self::$isCalculating = true;
+
+        try {
+            return self::doCalculateEcotaxe($db, $commande_id);
+        } finally {
+            self::$isCalculating = false;
+        }
+    }
+
+    /**
+     * Logique interne de calcul de l'écotaxe
+     *
+     * @param DoliDB $db          Database handler
+     * @param int    $commande_id ID de la commande
+     * @return int                1 si OK, 0 si rien à faire, -1 si erreur
+     */
+    private static function doCalculateEcotaxe($db, $commande_id)
+    {
+        global $conf, $user;
+
+        require_once DOL_DOCUMENT_ROOT . '/commande/class/commande.class.php';
+        require_once DOL_DOCUMENT_ROOT . '/product/class/product.class.php';
+
+        $ecotaxeValue = floatval(!empty($conf->global->ECOTAXE_VALUE) ? $conf->global->ECOTAXE_VALUE : 0.88);
+        $ecotaxeServiceId = intval(!empty($conf->global->ECOTAXE_SERVICE_ID) ? $conf->global->ECOTAXE_SERVICE_ID : 0);
+
+        // Charger la commande
+        $commande = new Commande($db);
+        $result = $commande->fetch($commande_id);
+        if ($result <= 0) {
+            return 0;
+        }
+
+        // Ne calculer que sur les commandes en brouillon
+        if ($commande->statut != 0) {
+            return 0;
+        }
+
+        $commande->fetch_lines();
+
+        // Ne gérer la transaction que si on n'est pas déjà dans une (ex: appel depuis un trigger)
+        $manageTransaction = ($db->transaction_opened == 0);
+        if ($manageTransaction) {
+            $db->begin();
+        }
+
+        try {
+            $poidsTotal = 0;
+            $montantEcotaxeTotal = 0;
+
+            // Identifier la ligne ecotaxe existante
+            $ligneEcotaxeExistante = false;
+            $ligneEcotaxeId = 0;
+            $rangEcotaxeExistant = 0;
+
+            // ÉTAPE 1 : Calculer les montants d'écotaxe et mettre à jour les extrafields des lignes
+            if (!empty($commande->lines)) {
+                foreach ($commande->lines as $line) {
+                    // Identifier la ligne de service écotaxe existante
+                    if ($ecotaxeServiceId > 0 && $line->fk_product == $ecotaxeServiceId && $line->product_type == 1) {
+                        $ligneEcotaxeExistante = true;
+                        $ligneEcotaxeId = $line->id;
+                        $rangEcotaxeExistant = $line->rang;
+                        continue;
+                    }
+
+                    // On ne traite que les produits (pas les services) pour le calcul
+                    if ($line->product_type == 0 && $line->fk_product > 0) {
+                        $product = new Product($db);
+                        $result = $product->fetch($line->fk_product);
+
+                        if ($result > 0 && $product->weight > 0) {
+                            $weightInKg = self::convertWeightToKg($product->weight, $product->weight_units);
+                            $quantite = $line->qty;
+                            $poidsTotalLigne = ($weightInKg * $quantite) / 1000; // en tonnes
+                            $poidsTotal += ($weightInKg * $quantite); // en kg
+
+                            $montantEcotaxeLigne = round($poidsTotalLigne * $ecotaxeValue, 3);
+                            $montantEcotaxeTotal += $montantEcotaxeLigne;
+
+                            // Mise à jour de l'extrafield de la ligne
+                            if (!is_array($line->array_options)) {
+                                $line->array_options = array();
+                            }
+                            $line->array_options['options_montant_ecotaxe'] = $montantEcotaxeLigne;
+
+                            $result = $commande->updateline(
+                                $line->id,
+                                $line->desc,
+                                $line->subprice,
+                                $line->qty,
+                                $line->remise_percent,
+                                $line->tva_tx,
+                                $line->localtax1_tx,
+                                $line->localtax2_tx,
+                                'HT',
+                                $line->info_bits,
+                                $line->date_start,
+                                $line->date_end,
+                                $line->product_type,
+                                $line->fk_parent_line,
+                                0,
+                                $line->fk_fournprice,
+                                $line->pa_ht,
+                                $line->label,
+                                $line->special_code,
+                                $line->array_options,
+                                $line->fk_unit,
+                                $line->multicurrency_subprice,
+                                $line->rang
+                            );
+
+                            if ($result <= 0) {
+                                throw new Exception('Error updating line: ' . $commande->error);
+                            }
+                        }
+                    }
+                }
+            }
+
+            // ÉTAPE 2 : Recharger la commande et mettre à jour les extrafields de l'en-tête
+            $commande->fetch($commande_id);
+            $commande->fetch_lines();
+
+            $montantEcotaxeTotalFormate = round($montantEcotaxeTotal, 3);
+            $commande->array_options['options_poids_total'] = round($poidsTotal);
+            $commande->array_options['options_eco_taxe'] = $montantEcotaxeTotalFormate;
+
+            $result = $commande->update($user);
+            if ($result <= 0) {
+                throw new Exception('Error updating order: ' . $commande->error);
+            }
+
+            // ÉTAPE 3 : Gestion de la ligne de service d'écotaxe
+            if ($ecotaxeServiceId > 0) {
+                $service = new Product($db);
+                $result = $service->fetch($ecotaxeServiceId);
+
+                if ($result > 0) {
+                    $descriptionService = $service->description ? $service->description : '';
+                    $tva_tx = $service->tva_tx;
+
+                    if ($montantEcotaxeTotalFormate > 0) {
+                        if ($ligneEcotaxeExistante) {
+                            // Mettre à jour la ligne existante
+                            $result = $commande->updateline(
+                                $ligneEcotaxeId,
+                                $descriptionService,
+                                $montantEcotaxeTotalFormate,
+                                1,
+                                0,
+                                $tva_tx,
+                                0,
+                                0,
+                                'HT',
+                                0,
+                                '',
+                                '',
+                                1,
+                                0,
+                                0,
+                                0,
+                                0,
+                                $service->label,
+                                0,
+                                array(),
+                                $service->fk_unit,
+                                0,
+                                $rangEcotaxeExistant
+                            );
+                        } else {
+                            // Ajouter une nouvelle ligne de service écotaxe
+                            $rang_max = 0;
+                            foreach ($commande->lines as $line) {
+                                if ($line->rang > $rang_max) {
+                                    $rang_max = $line->rang;
+                                }
+                            }
+
+                            $result = $commande->addline(
+                                $descriptionService,           // $desc
+                                $montantEcotaxeTotalFormate,   // $pu_ht
+                                1,                             // $qty
+                                $tva_tx,                       // $txtva
+                                0,                             // $txlocaltax1
+                                0,                             // $txlocaltax2
+                                $ecotaxeServiceId,             // $fk_product
+                                0,                             // $remise_percent
+                                0,                             // $info_bits
+                                0,                             // $fk_remise_except
+                                'HT',                          // $price_base_type
+                                0,                             // $pu_ttc
+                                '',                            // $date_start
+                                '',                            // $date_end
+                                1,                             // $type (1 = service)
+                                $rang_max + 1,                 // $rang
+                                0,                             // $special_code
+                                0,                             // $fk_parent_line
+                                null,                          // $fk_fournprice
+                                0,                             // $pa_ht
+                                $service->label,               // $label
+                                array(),                       // $array_options
+                                $service->fk_unit              // $fk_unit
+                            );
+                        }
+
+                        if ($result <= 0) {
+                            throw new Exception('Error adding/updating ecotaxe service line: ' . $commande->error);
+                        }
+                    } elseif ($ligneEcotaxeExistante) {
+                        // Montant = 0, supprimer la ligne de service ecotaxe
+                        $result = $commande->deleteline($user, $ligneEcotaxeId);
+                        if ($result <= 0) {
+                            throw new Exception('Error removing ecotaxe service line: ' . $commande->error);
+                        }
+                    }
+
+                    // Réorganiser les lignes pour que l'écotaxe soit en dernier
+                    self::reorganizeOrderLines($db, $commande);
+                } else {
+                    throw new Exception('Error loading ecotaxe service product');
+                }
+            }
+
+            if ($manageTransaction) {
+                $db->commit();
+            }
+            return 1;
+
+        } catch (Exception $e) {
+            if ($manageTransaction) {
+                $db->rollback();
+            }
+            dol_syslog('ActionsEcotaxe::calculateEcotaxeForOrder error: ' . $e->getMessage(), LOG_ERR);
+            return -1;
+        }
+    }
+
+    /**
+     * Convertit un poids dans l'unité donnée en kilogrammes
+     *
+     * @param float $weight Poids
+     * @param int   $unit   Code unité Dolibarr (0=g, 3=kg, 6=t, 98=lb, 99=oz)
+     * @return float Poids en kg
+     */
+    private static function convertWeightToKg($weight, $unit)
+    {
+        switch ($unit) {
+            case 0:  // grammes
+                return $weight / 1000;
+            case 3:  // kilogrammes
+                return $weight;
+            case 6:  // tonnes
+                return $weight * 1000;
+            case 98: // livres
+                return $weight * 0.45359237;
+            case 99: // onces
+                return $weight * 0.0283495231;
+            default:
+                return $weight;
+        }
+    }
+
+    /**
+     * Réorganise les lignes de commande pour que l'écotaxe soit en dernier
+     *
+     * @param DoliDB   $db       Database handler
      * @param Commande $commande Objet commande
      * @return void
      */
-    private function reorganizeOrderLines($commande)
+    private static function reorganizeOrderLines($db, $commande)
     {
         global $conf;
-        
-        // Récupérer l'ID du service d'écotaxe
+
         $ecotaxeServiceId = intval(!empty($conf->global->ECOTAXE_SERVICE_ID) ? $conf->global->ECOTAXE_SERVICE_ID : 0);
-        
+
         if ($ecotaxeServiceId <= 0) {
             return;
         }
-        
-        // CORRECTION 10 : Recharger les lignes de la commande pour avoir l'état le plus récent
+
         $commande->fetch_lines();
-        
+
         $lignesNormales = array();
         $ligneEcotaxe = null;
-        
-        // Séparer les lignes normales de la ligne d'écotaxe
+
         foreach ($commande->lines as $line) {
             if ($line->fk_product == $ecotaxeServiceId && $line->product_type == 1) {
                 $ligneEcotaxe = $line;
@@ -400,23 +435,19 @@ class ActionsEcotaxe
                 $lignesNormales[] = $line;
             }
         }
-        
-        // Réorganiser les rangs : lignes normales en premier, écotaxe à la fin
+
         $rang = 1;
-        
-        // Mettre à jour les rangs des lignes normales
         foreach ($lignesNormales as $line) {
             if ($line->rang != $rang) {
                 $sql = "UPDATE " . MAIN_DB_PREFIX . "commandedet SET rang = " . intval($rang) . " WHERE rowid = " . intval($line->id);
-                $this->db->query($sql);
+                $db->query($sql);
             }
             $rang++;
         }
-        
-        // Mettre à jour le rang de la ligne d'écotaxe pour qu'elle soit en dernier
+
         if ($ligneEcotaxe && $ligneEcotaxe->rang != $rang) {
             $sql = "UPDATE " . MAIN_DB_PREFIX . "commandedet SET rang = " . intval($rang) . " WHERE rowid = " . intval($ligneEcotaxe->id);
-            $this->db->query($sql);
+            $db->query($sql);
         }
     }
 }

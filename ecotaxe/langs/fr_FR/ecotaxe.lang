@@ -21,3 +21,5 @@ EcotaxeValueDescription = Valeur de l'écotaxe en € HT par tonne
 Calculer l'écotaxe = Calculer l'écotaxe
 EcotaxeCalculated = Écotaxe calculée
 ErrorOrderMustBeInDraftStatusToAddEcotaxe = La commande doit être en brouillon pour calculer l'écotaxe
+ErrorCalculatingEcotaxe = Erreur lors du calcul de l'écotaxe
+EcotaxeNothingToCalculate = Aucune écotaxe à calculer (pas de produits avec un poids ou commande non en brouillon)
