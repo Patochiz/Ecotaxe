@@ -60,7 +60,7 @@ class InterfaceEcotaxeTriggers extends DolibarrTriggers
     public function runTrigger($action, $object, User $user, Translate $langs, Conf $conf)
     {
         // Ne traiter que les événements de ligne de commande client
-        if (!in_array($action, array('LINEORDER_INSERT', 'LINEORDER_UPDATE', 'LINEORDER_DELETE'))) {
+        if (!in_array($action, array('LINEORDER_INSERT', 'LINEORDER_MODIFY', 'LINEORDER_UPDATE', 'LINEORDER_DELETE'))) {
             return 0;
         }
 
